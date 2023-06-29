@@ -5,7 +5,15 @@ from transformers import GPTNeoXForCausalLM, GPTNeoXConfig, GPT2Tokenizer
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm 
+
 import os 
+import json
+import tempfile
+
+from multiprocessing import Pool, cpu_count
+from transformers import PreTrainedTokenizerFast
+import hashlib
+
 
 # Define the training params
 num_iters = 11
@@ -16,8 +24,11 @@ if not os.path.exists(checkpoint_dir):
     os.makedirs(checkpoint_dir)
     
 model_dir='./configs/150m'
-max_len=30#None #none for setting it by model config 
-batch_size=16
+max_len=None #none for setting it by model config 
+debug_cut_size=10
+batch_size=2
+gpt_cut=100
+mem_cut=1_000_000
 
 tokenizer=GPT2Tokenizer.from_pretrained('./configs/tokenizer')
 config=GPTNeoXConfig.from_pretrained(model_dir)
@@ -27,37 +38,88 @@ if max_len==None:
     max_len=config.max_position_embeddings 
 
 #loading dummby data 
-import json
 data_file='cpp000000000302.json' 
 
-data = []
+def get_hash(code):
+    hash = hashlib.sha256(code.encode('UTF-8'))
+    return hash.hexdigest()
+
+data = {}
 errors=[]
 faultys=[]
 with open(data_file,'rb') as f:
     for i,line in enumerate(f):
         try:
-          data.append(json.loads(line))
+          #data.append(json.loads(line))
+          t=json.loads(line)['content'] 
+          k=get_hash(t)
+          data.update({k:t})
         except Exception as e:
-          print(f'errored at {i}')
+          print(f'errored at {i}: {e}')
           errors.append(e)
           faultys.append(line)
 
 # Now 'data' is a list of all the JSON objects in the file
 print(f'data: {len(data)} errors: {len(errors)}') 
 
-codes=[d['content'] for d in data[0:100] if 'content' in d.keys()]
+codes=[v for v in data.values()]
+
+if debug_cut_size!=None:
+    codes=codes[:debug_cut_size]
+    print(f'cuted codes to length{len(codes)}')
+
+
+def get_mem_usage(code):
+    '''
+    get the memory usage of a file containing @param:code
+    '''
+    with tempfile.NamedTemporaryFile() as temp_file:
+        file_path = temp_file.name
+
+        temp_file.write(bytes(code, 'utf-8'))
+        temp_file.flush()
+
+        mem_usage = os.path.getsize(file_path)
+        #print(mem_usage)
+
+    return mem_usage
 
 class TextDataset(Dataset):
-    def __init__(self, texts, tokenizer):
+    def __init__(self, texts, tokenizer: PreTrainedTokenizerFast, max_len, gpt_cut, mem_cut,num_workers: int = None):
         self.tokenizer = tokenizer
-        self.tokens=[]
+        self.max_len = max_len
+        self.gpt_cut = gpt_cut
+        self.mem_cut=mem_cut
+        self.num_workers = num_workers if num_workers else cpu_count()
 
-        for text in tqdm(texts):
-            encodings = tokenizer(text, truncation=True,
-                                  #padding='max_length',
-                                  max_length=max_len)
+        print("Starting tokenization...")
+        with Pool(self.num_workers) as p:
+            tokens = p.map(self.tokenize_text, texts)
 
-            self.tokens.append(encodings['input_ids'])
+        # Filter out None results from tokenization
+        self.tokens = []
+        for chunks in tokens:
+            if chunks is not None:  # Filter out None results
+                for chunk in chunks:
+                    self.tokens.append(chunk)  # Flatten the list
+        print(f"Finished tokenization. Kept {len(self.tokens)} sequences.")
+
+        if debug_cut_size!=None:
+            self.tokens=self.tokens[:debug_cut_size]
+            print(f'cuting size for debuging purposes to {len(self.tokens)}')
+
+    def tokenize_text(self, text):
+        if get_mem_usage(text)>self.mem_cut:
+            #print('mem fail')
+            return None
+
+        tokens = self.tokenizer.encode(text)
+        if len(tokens) > self.gpt_cut:
+            #print('passed')
+            return [tokens[i : i + self.max_len] for i in range(0, len(tokens), self.max_len)]
+        else:
+            #print('tokens fail')
+            return None
 
     def __getitem__(self, idx):
         return torch.IntTensor(self.tokens[idx])
@@ -65,9 +127,12 @@ class TextDataset(Dataset):
     def __len__(self):
         return len(self.tokens)
 
-# Tokenize your dataset and create a PyTorch Dataset
-dataset = TextDataset(codes, tokenizer)
 
+
+
+# Tokenize your dataset and create a PyTorch Dataset
+dataset = TextDataset(codes, tokenizer,max_len, gpt_cut, mem_cut)
+print(len(dataset))
 # Split dataset into training and test set
 train_size = int(0.9 * len(dataset))
 test_size = len(dataset) - train_size
@@ -80,10 +145,15 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, co
 test_loader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=collate_fn)
 
 # Define the device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+try: 
+    device='xpu'
+    model=model.to(device)
+except:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    model=model.to(device)
+    #model=torch.nn.DataParallel(model, device_ids=['cpu'])
 print(f'\ncomputations are done on {device}\n')
-model.to(device)
-#model=torch.nn.DataParallel(model, device_ids=['cpu'])
 
 # Define the optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=0.00016, betas=(0.9, 0.999), eps=1.0e-8)
