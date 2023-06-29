@@ -37,32 +37,44 @@ model=GPTNeoXForCausalLM(config)
 if max_len==None:
     max_len=config.max_position_embeddings 
 
-#loading dummby data 
-data_file='cpp000000000302.json' 
 
 def get_hash(code):
     hash = hashlib.sha256(code.encode('UTF-8'))
     return hash.hexdigest()
 
-data = {}
-errors=[]
-faultys=[]
-with open(data_file,'rb') as f:
-    for i,line in enumerate(f):
-        try:
-          #data.append(json.loads(line))
-          t=json.loads(line)['content'] 
-          k=get_hash(t)
-          data.update({k:t})
-        except Exception as e:
-          print(f'errored at {i}: {e}')
-          errors.append(e)
-          faultys.append(line)
+def load_data(file):
+    data = {}
+    errors = 0
+    with open(file,'rb') as f:
+        for i,line in enumerate(f):
+            try:
+                t = json.loads(line)['content']
+                k = get_hash(t)
+                data[k] = t
+            except Exception as e:
+                print(f'Errored on file {file} at line {i}: {e}')
+                errors += 1
+    return data, errors
 
-# Now 'data' is a list of all the JSON objects in the file
-print(f'data: {len(data)} errors: {len(errors)}') 
+def load_all_data(dir_path, num_workers: int = None):
+    num_workers = num_workers if num_workers else cpu_count()
+    
+    print("Starting loading data...")
+    with Pool(num_workers) as p:
+        results = p.map(load_data, [os.path.join(dir_path, file) for file in os.listdir(dir_path) if file.endswith('.json')])
+    print("Finished loading data.")
+    
+    data = {}
+    total_errors = 0
+    for result in results:
+        data.update(result[0])
+        total_errors += result[1]
+    print(f"Loaded data from {len(results)} files with a total of {total_errors} errors.")
+    
+    return list(data.values())
 
-codes=[v for v in data.values()]
+
+codes=load_all_data('./data')
 
 if debug_cut_size!=None:
     codes=codes[:debug_cut_size]
