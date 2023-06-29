@@ -81,8 +81,9 @@ test_loader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=collate
 
 # Define the device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#model.to(device)
-model=torch.nn.DataParallel(model, device_ids=['cpu'])
+print(f'\ncomputations are done on {device}\n')
+model.to(device)
+#model=torch.nn.DataParallel(model, device_ids=['cpu'])
 
 # Define the optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=0.00016, betas=(0.9, 0.999), eps=1.0e-8)
