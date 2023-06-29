@@ -50,24 +50,20 @@ codes=[d['content'] for d in data[0:100] if 'content' in d.keys()]
 class TextDataset(Dataset):
     def __init__(self, texts, tokenizer):
         self.tokenizer = tokenizer
-        self.inputs = []
-        self.targets = []
+        self.tokens=[]
 
         for text in tqdm(texts):
             encodings = tokenizer(text, truncation=True,
                                   #padding='max_length',
                                   max_length=max_len)
-            #encodings=tokenizer(text)
-            self.inputs.append(encodings['input_ids'])
-            self.targets.append(encodings['input_ids'])
+
+            self.tokens.append(encodings['input_ids'])
 
     def __getitem__(self, idx):
-        item = {"input_ids": torch.IntTensor(self.inputs[idx]), 
-                "labels": torch.IntTensor(self.targets[idx])}
-        return item
+        return torch.IntTensor(self.tokens[idx])
 
     def __len__(self):
-        return len(self.inputs)
+        return len(self.tokens)
 
 # Tokenize your dataset and create a PyTorch Dataset
 dataset = TextDataset(codes, tokenizer)
@@ -78,9 +74,7 @@ test_size = len(dataset) - train_size
 train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
 
 def collate_fn(batch):
-    input_ids = pad_sequence([item['input_ids'] for item in batch], batch_first=True)
-    labels = pad_sequence([item['labels'] for item in batch], batch_first=True)
-    return {"input_ids": input_ids, "labels": labels}
+    return  pad_sequence(batch, batch_first=True)
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=collate_fn)
@@ -112,8 +106,8 @@ for epoch in range(1, num_iters+1):
         optimizer.zero_grad()
 
         # Load data and labels
-        input_ids = batch["input_ids"].to(device)
-        labels = batch["labels"].to(device).to(torch.long)
+        input_ids = batch.to(device)
+        labels = input_ids.to(torch.long)
         
         # Forward pass
         outputs = model(input_ids, labels=labels)
@@ -150,8 +144,8 @@ for epoch in range(1, num_iters+1):
         for batch in test_loader_tqdm:
             with torch.no_grad():
                 # Load data and labels
-                input_ids = batch["input_ids"].to(device)
-                labels = batch["labels"].to(device).to(torch.long)
+                input_ids = batch.to(device)
+                labels = input_ids.to(torch.long)
                 
                 # Forward pass
                 outputs = model(input_ids, labels=labels)
@@ -172,6 +166,7 @@ for epoch in range(1, num_iters+1):
 
         # Save a checkpoint
         if epoch % save_interval == 0 or epoch==num_iters:
+            print(f'saving at: {checkpoint_dir}/checkpoint_{epoch}.pt')
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
