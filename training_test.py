@@ -1,4 +1,5 @@
 import torch 
+
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from transformers import GPTNeoXForCausalLM, GPTNeoXConfig, GPT2Tokenizer
 
@@ -15,6 +16,11 @@ from transformers import PreTrainedTokenizerFast
 import hashlib
 
 
+num_xpus=0
+if num_xpus:
+    import intel_extension_for_pytorch as ipex
+    if num_xpus==1:
+        num_xpus=None
 # Define the training params
 num_iters = 11
 eval_interval = 5  
@@ -157,15 +163,22 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, co
 test_loader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=collate_fn)
 
 # Define the device
-try: 
-    device='xpu'
-    model=model.to(device)
-except:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    model=model.to(device)
-    #model=torch.nn.DataParallel(model, device_ids=['cpu'])
-print(f'\ncomputations are done on {device}\n')
+
+if num_xpus:
+    device_ids=[torch.device(f'xpu:{i}') for i in range(num_xpus)]
+    model=torch.nn.DataParallel(model,device_ids=device_ids)
+    print(f'\ncomputations are done on {device_ids}\n') 
+
+else:
+    try: 
+        device='xpu'
+        model=model.to(device)
+    except:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        model=model.to(device)
+        #model=torch.nn.DataParallel(model, device_ids=['cpu'])
+    print(f'\ncomputations are done on {device}\n')
 
 # Define the optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=0.00016, betas=(0.9, 0.999), eps=1.0e-8)
@@ -189,7 +202,10 @@ for epoch in range(1, num_iters+1):
         optimizer.zero_grad()
 
         # Load data and labels
-        input_ids = batch.to(device)
+        if num_xpus:
+            input_ids = batch
+        else:
+            input_ids = batch.to(device)
         labels = input_ids.to(torch.long)
         
         # Forward pass
@@ -227,8 +243,11 @@ for epoch in range(1, num_iters+1):
         for batch in test_loader_tqdm:
             with torch.no_grad():
                 # Load data and labels
-                input_ids = batch.to(device)
-                labels = input_ids.to(torch.long)
+                if num_xpus:
+                    input_ids = batch
+                else:
+                    input_ids = batch.to(device)
+                    labels = input_ids.to(torch.long)
                 
                 # Forward pass
                 outputs = model(input_ids, labels=labels)
