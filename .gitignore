@@ -2,3 +2,4 @@ checkpoints/
 .ipynb_checkpoints/
 data/
 cpp000000000302.json
+test_garbage/

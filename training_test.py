@@ -1,5 +1,4 @@
 import torch 
-
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from transformers import GPTNeoXForCausalLM, GPTNeoXConfig, GPT2Tokenizer
 
@@ -18,7 +17,7 @@ import hashlib
 
 num_xpus=0
 if num_xpus:
-    import intel_extension_for_pytorch as ipex
+
     if num_xpus==1:
         num_xpus=None
 # Define the training params
@@ -150,11 +149,12 @@ class TextDataset(Dataset):
 
 # Tokenize your dataset and create a PyTorch Dataset
 dataset = TextDataset(codes, tokenizer,max_len, gpt_cut, mem_cut)
-print(len(dataset))
 # Split dataset into training and test set
-train_size = int(0.9 * len(dataset))
-test_size = len(dataset) - train_size
+test_size = 3
+train_size = len(dataset)-test_size
 train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+
+print(f'Datasets: train:[{len(train_dataset)}] test:[{len(test_dataset)}]')
 
 def collate_fn(batch):
     return  pad_sequence(batch, batch_first=True)
