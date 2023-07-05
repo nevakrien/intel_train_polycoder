@@ -5,6 +5,7 @@ Tokenizes and splits a text dataset into training and testing sets, saving each 
 
 import os
 import json
+import csv
 import tempfile 
 import hashlib
 from collections import defaultdict
@@ -85,12 +86,12 @@ def tokenize_text(params):
         return None
 
     tokens = tokenizer.encode(text)
-    pad_token_id = tokenizer.pad_token_id
+    #this is bugged!!! pad_token_id = tokenizer.pad_token_id
 
     if len(tokens) > gpt_cut:
         chunks = [tokens[i : i + max_len] for i in range(0, len(tokens), max_len)]
         # Pad the last chunk to max_len with the pad_token_id
-        chunks[-1] = chunks[-1] + [pad_token_id]*(max_len - len(chunks[-1]))
+        chunks[-1] = chunks[-1] + [-100]*(max_len - len(chunks[-1]))
         return chunks
     else:
         return None
@@ -134,6 +135,19 @@ def preprocess_data(dir_path, save_path, tokenizer_path, max_len, gpt_cut, mem_c
     with open(os.path.join(save_path,'test_names.json'), 'w') as file:
         json.dump(test_names, file)
 
+
+    print('Saving lengths')
+    test_lengths = [len(chunks) for chunks in test_chunks]
+    with open(os.path.join(save_path,'test_lengths.csv'), 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerows([[length] for length in test_lengths])
+
+    train_lengths = [len(chunks) for chunks in train_chunks]
+    with open(os.path.join(save_path,'train_lengths.csv'), 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerows([[length] for length in train_lengths])
+
+
     #flattening the chunks 
     train_tokens = []
     for chunks in train_chunks:
@@ -152,6 +166,7 @@ def preprocess_data(dir_path, save_path, tokenizer_path, max_len, gpt_cut, mem_c
     test_tokens=np.array(test_tokens) 
     np.save(os.path.join(save_path, "test_tokens.npy"), test_tokens)
     print(f"test ready with {len(test_tokens)} sequnces")
+
 
 
 if __name__ == "__main__":

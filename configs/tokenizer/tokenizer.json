@@ -11,15 +11,6 @@
       "rstrip": false,
       "normalized": true,
       "special": true
-    },
-    {
-      "id": 50257,
-      "content": "[PAD]",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
     }
   ],
   "normalizer": null,

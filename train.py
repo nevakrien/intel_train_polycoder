@@ -10,15 +10,21 @@ import os
 
 
 class TextDataset(torch.utils.data.Dataset):
-    def __init__(self, file_path):
+    def __init__(self, file_path,pad_token=1):
         self.data = np.load(file_path)
+        self.pad_token=1
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        return self.data[idx]
-
+        labels = torch.IntTensor(self.data[idx])
+        mask=labels==-100 
+        input_ids=labels.clone()
+        input_ids[mask]=self.pad_token
+        labels=labels.to(torch.long)
+        return input_ids,labels,mask
+    
 
 def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, save_interval, eval_interval, checkpoint_dir,num_xpus):
     model.train()
@@ -54,14 +60,13 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             optimizer.zero_grad()
 
             # Load data and labels
-            if num_xpus:
-                input_ids = batch
-            else:
-                input_ids = batch.to(device)
-            labels = input_ids.to(torch.long)
+            if not num_xpus:
+                batch=(x.to(device) for x in batch)
+            
+            input_ids,labels,mask=batch    
             
             # Forward pass
-            outputs = model(input_ids, labels=labels)
+            outputs = model(input_ids, labels=labels,attention_mask=mask)
             
             # Get the loss from the outputs
             loss = outputs.loss
@@ -95,14 +100,13 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             for batch in test_loader_tqdm:
                 with torch.no_grad():
                     # Load data and labels
-                    if num_xpus:
-                        input_ids = batch
-                    else:
-                        input_ids = batch.to(device)
-                        labels = input_ids.to(torch.long)
+                    if not num_xpus:
+                        batch=(x.to(device) for x in batch)
+                    
+                    input_ids,labels,mask=batch    
                     
                     # Forward pass
-                    outputs = model(input_ids, labels=labels)
+                    outputs = model(input_ids, labels=labels,attention_mask=mask)
                     
                     # Get the loss from the outputs
                     loss = outputs.loss
@@ -151,16 +155,16 @@ if __name__ == '__main__':
         if num_xpus==1:
             num_xpus=None 
 
-    train_dataset = TextDataset(args.train_data)
-    test_dataset = TextDataset(args.test_data)
-
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size)
-
     config=GPTNeoXConfig.from_pretrained(args.config)
     model=GPTNeoXForCausalLM(config)
 
     optimizer = AdamW(model.parameters(), lr=0.00016, betas=(0.9, 0.999), eps=1.0e-8)
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=args.epochs, T_mult=1, eta_min=0, last_epoch=-1) 
+    
+    train_dataset = TextDataset(args.train_data)
+    test_dataset = TextDataset(args.test_data)
+
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size)
 
     train(model, train_loader, test_loader, optimizer, scheduler, args.epochs, args.save_interval, args.eval_interval, args.save_dir,num_xpus)
