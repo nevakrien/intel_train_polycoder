@@ -36,7 +36,8 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
         print(f'Epoch {epoch}/{num_iters}')
         model.train()
         # Reset the total loss for this epoch.
-        total_loss = 0
+        total_loss=0
+        total_batched_loss = 0
         total_corect=0
         total_seen=0
 
@@ -57,14 +58,16 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             logits = outputs.logits            
             
            # Calculate accuracy
-            idx=~mask.bool()
-            predictions = torch.argmax(logits, dim=-1)
-            correct_predictions = (predictions[idx] == labels[idx]).sum()
+            idx=~mask[:,1:].bool()
+            #idx[:,0]=False  #we need to do this because the end token isnt actuly being considered for predictions
+            predictions = torch.argmax(logits[:,:-1], dim=-1)
+            correct_predictions = (predictions[idx] == labels[:,1:][idx]).sum()
             num_preds = idx.sum()
             assert num_preds>0 
 
             #metrics and logs
-            total_loss += loss.cpu().detach().item()
+            total_batched_loss += loss.cpu().detach().item()
+            total_loss += (loss*num_preds).cpu().detach().item()
             total_corect+=correct_predictions.cpu().detach().item()
             total_seen+=num_preds.cpu().detach().item()
 
@@ -74,18 +77,21 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             scheduler.step()
 
 
-            train_loader_tqdm.set_postfix({'training_loss': total_loss /  (train_loader_tqdm.n + 1),'training_accuracy': total_corect /total_seen})
+            train_loader_tqdm.set_postfix({'training_loss':total_loss/total_seen,'batch_loss': total_batched_loss /  (train_loader_tqdm.n + 1),'training_accuracy': total_corect /total_seen})
 
         # Calculate the average loss over the training data.
-        avg_train_loss = total_loss / len(train_loader)
+        avg_train_loss= total_loss/total_seen
+        avg_batch_loss = total_batched_loss / len(train_loader)
         avg_train_accuracy = total_corect/total_seen
         print(f"Average training loss: {avg_train_loss}")
+        print(f"Average batched_loss: {avg_batch_loss}")
         print(f"Average training accuracy: {avg_train_accuracy}")
 
         # Evaluation
         if epoch % eval_interval == 0 or epoch==num_iters:
             model.eval()
-            total_loss = 0
+            total_loss=0
+            total_batched_loss = 0
             total_corect=0
             total_seen=0
 
@@ -105,24 +111,28 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
                     logits = outputs.logits            
                     
                    # Calculate accuracy
-                    idx=~mask.bool()
-                    predictions = torch.argmax(logits, dim=-1)
-                    correct_predictions = (predictions[idx] == labels[idx]).sum()
+                    idx=~mask[:,1:].bool()
+                    #idx[:,0]=False  #we need to do this because the end token isnt actuly being considered for predictions
+                    predictions = torch.argmax(logits[:,:-1], dim=-1)
+                    correct_predictions = (predictions[idx] == labels[:,1:][idx]).sum()
                     num_preds = idx.sum()
                     assert num_preds>0 
 
                     #metrics and logs
-                    total_loss += loss.cpu().detach().item()
+                    total_batched_loss += loss.cpu().detach().item()
+                    total_loss += (loss*num_preds).cpu().detach().item()
                     total_corect+=correct_predictions.cpu().detach().item()
                     total_seen+=num_preds.cpu().detach().item()
 
                     # Update the progress bar
-                    test_loader_tqdm.set_postfix({'eval_loss': total_loss / (test_loader_tqdm.n + 1),'eval_accuracy': total_corect/total_seen})
+                    test_loader_tqdm.set_postfix({'eval_loss':total_loss/total_seen,'batch_loss':total_batched_loss / (test_loader_tqdm.n + 1),'eval_accuracy': total_corect/total_seen})
 
             # Calculate the average loss over the training data.
-            avg_eval_loss = total_loss / len(test_loader)
+            avg_eval_loss= total_loss/total_seen
+            avg_batch_loss = total_batched_loss / len(test_loader)
             avg_eval_accuracy = total_corect/total_seen
             print(f"Average eval loss: {avg_eval_loss}")
+            print(f"Average batched_loss: {avg_batch_loss}")
             print(f"Average eval accuracy: {avg_eval_accuracy}")
             
 
@@ -135,6 +145,7 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': avg_train_loss,
+                    'eval loss':avg_eval_loss
                 }, f'{checkpoint_dir}/checkpoint_{epoch}.pt')
 
 

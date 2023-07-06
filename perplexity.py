@@ -59,12 +59,17 @@ def get_denominator(doc_tokens,lexer):
     return num_tok*lex_vocab
 
 @torch.no_grad()
-def get_neg_log(input_ids, model, MAX_INPUT_LEN):
+def get_neg_log(tokens, model, MAX_INPUT_LEN):
     MAX_LEN = model.config.max_position_embeddings
+    input_ids=tokens[:,:-1] 
+    target_ids=tokens[:,1:] 
 
     x = input_ids[:, :MAX_INPUT_LEN]
+    y=  target_ids[:, :MAX_INPUT_LEN]
+
+    #print(f'x: {x.shape} y: {y.shape}')
     out = model(x)
-    ans = F.cross_entropy(out.logits, F.one_hot(x, out.logits.shape[-1]).to(float), reduction='sum')
+    ans = F.cross_entropy(out.logits, F.one_hot(y, out.logits.shape[-1]).to(float), reduction='sum')
 
     start = MAX_INPUT_LEN
     end = 2 * MAX_INPUT_LEN - MAX_LEN
@@ -72,12 +77,12 @@ def get_neg_log(input_ids, model, MAX_INPUT_LEN):
     while start < input_ids.shape[1]:
         cut_kv=[[z[:,:,-MAX_LEN:] for z in y] for y in out.past_key_values]
         x = input_ids[:, start:end]
+        y = target_ids[:, start:end]
+        #print(f'x: {x.shape} y: {y.shape}')
         out = model(x)
-        ans += F.cross_entropy(out.logits, F.one_hot(x, out.logits.shape[-1]).to(float), reduction='sum')
+        ans += F.cross_entropy(out.logits, F.one_hot(y, out.logits.shape[-1]).to(float), reduction='sum')
         start = end
         end += MAX_INPUT_LEN - MAX_LEN
-
-    return ans
 
     return ans
 
@@ -124,6 +129,6 @@ if __name__ == '__main__':
 	for x in tqdm(dataset,desc='calculating neg log prob'):
 		neg_log+=get_neg_log(x,model,args.max_input_len)
 
-	print(torch.exp(neg_log/d)
+	
 	print(torch.exp(neg_log/d).cpu().detach().item())
 	print('yay')
