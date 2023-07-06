@@ -19,7 +19,7 @@
   "rotary_pct": 1.0,
   "tie_word_embeddings": false,
   "tokenizer_class": "GPT2Tokenizer",
-  "torch_dtype": "float32",
+  "torch_dtype": "float16",
   "transformers_version": "4.29.2",
   "use_cache": true,
   "use_parallel_residual": false,

@@ -26,24 +26,9 @@ class TextDataset(torch.utils.data.Dataset):
         return input_ids,labels,mask
     
 
-def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, save_interval, eval_interval, checkpoint_dir,num_xpus):
+def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, save_interval, eval_interval, checkpoint_dir,device='cpu'):
     model.train()
-
-    if num_xpus:
-        device_ids=[torch.device(f'xpu:{i}') for i in range(num_xpus)]
-        model=torch.nn.DataParallel(model,device_ids=device_ids)
-        print(f'\ncomputations are done on {device_ids}\n') 
-
-    else:
-        try: 
-            device='xpu'
-            model=model.to(device)
-        except:
-            device = 'cpu'#torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            
-            model=model.to(device)
-            #model=torch.nn.DataParallel(model, device_ids=['cpu'])
-        print(f'\ncomputations are done on {device}\n')
+    print(f'\ncomputations are done on {device}\n')
 
 
     # Training Loop
@@ -52,7 +37,8 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
         model.train()
         # Reset the total loss for this epoch.
         total_loss = 0
-        total_accuracy=0
+        total_corect=0
+        total_seen=0
 
         # Training loop with tqdm
         train_loader_tqdm = tqdm(train_loader)
@@ -60,10 +46,7 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             # Zero the gradients
             optimizer.zero_grad()
 
-            # Load data and labels
-            if not num_xpus:
-                batch=(x.to(device) for x in batch)
-            
+            batch=(x.to(device) for x in batch)            
             input_ids,labels,mask=batch    
             
             # Forward pass
@@ -78,27 +61,24 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             predictions = torch.argmax(logits, dim=-1)
             correct_predictions = (predictions[idx] == labels[idx]).sum()
             num_preds = idx.sum()
-            assert num_preds>0
-            accuracy = correct_predictions / num_preds
+            assert num_preds>0 
+
             #metrics and logs
             total_loss += loss.cpu().detach().item()
-            total_accuracy+=accuracy.cpu().detach().item()
+            total_corect+=correct_predictions.cpu().detach().item()
+            total_seen+=num_preds.cpu().detach().item()
 
             # Backward pass
             loss.backward() 
             optimizer.step()
             scheduler.step()
 
-            #metrics and logs
-            total_loss += loss.cpu().detach().item()
-            total_accuracy+=accuracy.cpu().detach().item()
 
-        
-            train_loader_tqdm.set_postfix({'training_loss': total_loss /  (train_loader_tqdm.n + 1),'training_accuracy': total_accuracy /  (train_loader_tqdm.n + 1)})
+            train_loader_tqdm.set_postfix({'training_loss': total_loss /  (train_loader_tqdm.n + 1),'training_accuracy': total_corect /total_seen})
 
         # Calculate the average loss over the training data.
         avg_train_loss = total_loss / len(train_loader)
-        avg_train_accuracy = total_accuracy / len(train_loader)
+        avg_train_accuracy = total_corect/total_seen
         print(f"Average training loss: {avg_train_loss}")
         print(f"Average training accuracy: {avg_train_accuracy}")
 
@@ -106,16 +86,15 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
         if epoch % eval_interval == 0 or epoch==num_iters:
             model.eval()
             total_loss = 0
-            total_accuracy=0
+            total_corect=0
+            total_seen=0
 
             # Adding tqdm to evaluation loop
             test_loader_tqdm = tqdm(test_loader, desc="Evaluating")
             for batch in test_loader_tqdm:
                 with torch.no_grad():
                     # Load data and labels
-                    if not num_xpus:
-                        batch=(x.to(device) for x in batch)
-                    
+                    batch=(x.to(device) for x in batch)
                     input_ids,labels,mask=batch    
                     
                     # Forward pass
@@ -125,23 +104,24 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
                     loss = outputs.loss
                     logits = outputs.logits            
                     
-                    # Calculate accuracy
+                   # Calculate accuracy
                     idx=~mask.bool()
                     predictions = torch.argmax(logits, dim=-1)
                     correct_predictions = (predictions[idx] == labels[idx]).sum()
                     num_preds = idx.sum()
-                    assert num_preds>0
-                    accuracy = correct_predictions / num_preds
+                    assert num_preds>0 
+
                     #metrics and logs
                     total_loss += loss.cpu().detach().item()
-                    total_accuracy+=accuracy.cpu().detach().item()
+                    total_corect+=correct_predictions.cpu().detach().item()
+                    total_seen+=num_preds.cpu().detach().item()
 
                     # Update the progress bar
-                    test_loader_tqdm.set_postfix({'eval_loss': total_loss / (test_loader_tqdm.n + 1),'eval_accuracy': total_accuracy /  (train_loader_tqdm.n + 1)})
+                    test_loader_tqdm.set_postfix({'eval_loss': total_loss / (test_loader_tqdm.n + 1),'eval_accuracy': total_corect/total_seen})
 
             # Calculate the average loss over the training data.
             avg_eval_loss = total_loss / len(test_loader)
-            avg_eval_accuracy = total_accuracy / len(test_loader)
+            avg_eval_accuracy = total_corect/total_seen
             print(f"Average eval loss: {avg_eval_loss}")
             print(f"Average eval accuracy: {avg_eval_accuracy}")
             
@@ -161,7 +141,7 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Script to train GPT-2 model")
 
-    parser.add_argument('--config', type=str, default='./configs/150m', help="Path to the config for building the model")
+    parser.add_argument('--config', type=str, default='./configs/160m', help="Path to the config for building the model")
     parser.add_argument('--data_dir', type=str, required=True, help="Directory containing the train and test data")
     parser.add_argument('--save_dir', type=str, required=True, help="Directory to save model checkpoints")
     parser.add_argument('--batch_size', type=int, default=2, help="Batch size for training")
@@ -169,15 +149,15 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=5, help="Number of epochs to train")
     parser.add_argument('--save_interval', type=int, default=1, help="Interval to save model checkpoints")
     parser.add_argument('--eval_interval', type=int, default=1, help="Interval to evaluate the model on test data")
-    parser.add_argument('--num_xpus', type=int, default=None, help="required for runing on intel fast")
+    parser.add_argument('--xpu', type=int, default=0, help="required for runing on intel fast")
+    #parser.add_argument('--num_xpus', type=int, default=None, help="required for runing on intel fast")
 
     args = parser.parse_args()
-    num_xpus=args.num_xpus
-    
-    if num_xpus:
+    if args.xpu:
         import intel_extension_for_pytorch as ipex
-        if num_xpus==1:
-            num_xpus=None 
+        device='xpu'
+    else:
+        device='cpu'
 
     config=GPTNeoXConfig.from_pretrained(args.config)
     model=GPTNeoXForCausalLM(config)
@@ -194,4 +174,4 @@ if __name__ == '__main__':
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size)
 
-    train(model, train_loader, test_loader, optimizer, scheduler, args.epochs, args.save_interval, args.eval_interval, args.save_dir,num_xpus)
+    train(model, train_loader, test_loader, optimizer, scheduler, args.epochs, args.save_interval, args.eval_interval, args.save_dir,device)
