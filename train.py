@@ -58,11 +58,11 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             logits = outputs.logits            
             
            # Calculate accuracy
-            idx=~mask[:,1:].bool()
+            idx=~mask.bool()
             #idx[:,0]=False  #we need to do this because the end token isnt actuly being considered for predictions
-            predictions = torch.argmax(logits[:,:-1], dim=-1)
-            correct_predictions = (predictions[idx] == labels[:,1:][idx]).sum()
-            num_preds = idx.sum()
+            predictions = torch.argmax(logits[:,:-1][idx[:,:-1]], dim=-1)
+            correct_predictions = (predictions == labels[:,1:][idx[:,1:]]).sum()
+            num_preds = predictions.sum()
             assert num_preds>0 
 
             #metrics and logs
@@ -110,13 +110,13 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
                     loss = outputs.loss
                     logits = outputs.logits            
                     
-                   # Calculate accuracy
-                    idx=~mask[:,1:].bool()
+                    # Calculate accuracy
+                    idx=~mask.bool()
                     #idx[:,0]=False  #we need to do this because the end token isnt actuly being considered for predictions
-                    predictions = torch.argmax(logits[:,:-1], dim=-1)
-                    correct_predictions = (predictions[idx] == labels[:,1:][idx]).sum()
-                    num_preds = idx.sum()
-                    assert num_preds>0 
+                    predictions = torch.argmax(logits[:,:-1][idx[:,:-1]], dim=-1)
+                    correct_predictions = (predictions == labels[:,1:][idx[:,1:]]).sum()
+                    num_preds = predictions.sum()
+                    assert num_preds>0  
 
                     #metrics and logs
                     total_batched_loss += loss.cpu().detach().item()
