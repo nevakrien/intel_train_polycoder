@@ -73,11 +73,16 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             loss = outputs.loss
             logits = outputs.logits            
             
-            # Calculate accuracy
+           # Calculate accuracy
+            idx=~mask.bool()
             predictions = torch.argmax(logits, dim=-1)
-            correct_predictions = (predictions == labels).sum()
-            num_preds = labels.numel()
+            correct_predictions = (predictions[idx] == labels[idx]).sum()
+            num_preds = idx.sum()
+            assert num_preds>0
             accuracy = correct_predictions / num_preds
+            #metrics and logs
+            total_loss += loss.cpu().detach().item()
+            total_accuracy+=accuracy.cpu().detach().item()
 
             # Backward pass
             loss.backward() 
@@ -89,7 +94,7 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             total_accuracy+=accuracy.cpu().detach().item()
 
         
-            train_loader_tqdm.set_postfix({'running_loss': total_loss /  (train_loader_tqdm.n + 1),'running_accuracy': total_accuracy /  (train_loader_tqdm.n + 1)})
+            train_loader_tqdm.set_postfix({'training_loss': total_loss /  (train_loader_tqdm.n + 1),'training_accuracy': total_accuracy /  (train_loader_tqdm.n + 1)})
 
         # Calculate the average loss over the training data.
         avg_train_loss = total_loss / len(train_loader)
@@ -121,11 +126,12 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
                     logits = outputs.logits            
                     
                     # Calculate accuracy
+                    idx=~mask.bool()
                     predictions = torch.argmax(logits, dim=-1)
-                    correct_predictions = (predictions == labels).sum()
-                    num_preds = labels.numel()
+                    correct_predictions = (predictions[idx] == labels[idx]).sum()
+                    num_preds = idx.sum()
+                    assert num_preds>0
                     accuracy = correct_predictions / num_preds
-
                     #metrics and logs
                     total_loss += loss.cpu().detach().item()
                     total_accuracy+=accuracy.cpu().detach().item()
