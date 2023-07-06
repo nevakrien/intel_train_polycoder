@@ -39,7 +39,7 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             device='xpu'
             model=model.to(device)
         except:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            device = 'cpu'#torch.device("cuda" if torch.cuda.is_available() else "cpu")
             
             model=model.to(device)
             #model=torch.nn.DataParallel(model, device_ids=['cpu'])
@@ -52,6 +52,7 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
         model.train()
         # Reset the total loss for this epoch.
         total_loss = 0
+        total_accuracy=0
 
         # Training loop with tqdm
         train_loader_tqdm = tqdm(train_loader)
@@ -68,32 +69,39 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             # Forward pass
             outputs = model(input_ids, labels=labels,attention_mask=mask)
             
-            # Get the loss from the outputs
+            # Get the loss and logits from the outputs
             loss = outputs.loss
+            logits = outputs.logits            
             
+            # Calculate accuracy
+            predictions = torch.argmax(logits, dim=-1)
+            correct_predictions = (predictions == labels).sum()
+            num_preds = labels.numel()
+            accuracy = correct_predictions / num_preds
+
             # Backward pass
-            loss.backward()
-            
-            # Update weights
+            loss.backward() 
             optimizer.step()
-            
-            # Update the learning rate.
             scheduler.step()
 
-            # Add the loss to the total loss
+            #metrics and logs
             total_loss += loss.cpu().detach().item()
+            total_accuracy+=accuracy.cpu().detach().item()
 
-            # Update the progress bar
-            train_loader_tqdm.set_postfix({'running_loss': total_loss /  (train_loader_tqdm.n + 1)})
+        
+            train_loader_tqdm.set_postfix({'running_loss': total_loss /  (train_loader_tqdm.n + 1),'running_accuracy': total_accuracy /  (train_loader_tqdm.n + 1)})
 
         # Calculate the average loss over the training data.
         avg_train_loss = total_loss / len(train_loader)
+        avg_train_accuracy = total_accuracy / len(train_loader)
         print(f"Average training loss: {avg_train_loss}")
+        print(f"Average training accuracy: {avg_train_accuracy}")
 
         # Evaluation
         if epoch % eval_interval == 0 or epoch==num_iters:
             model.eval()
-            eval_total_loss = 0
+            total_loss = 0
+            total_accuracy=0
 
             # Adding tqdm to evaluation loop
             test_loader_tqdm = tqdm(test_loader, desc="Evaluating")
@@ -108,18 +116,29 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
                     # Forward pass
                     outputs = model(input_ids, labels=labels,attention_mask=mask)
                     
-                    # Get the loss from the outputs
+                    # Get the loss and logits from the outputs
                     loss = outputs.loss
+                    logits = outputs.logits            
+                    
+                    # Calculate accuracy
+                    predictions = torch.argmax(logits, dim=-1)
+                    correct_predictions = (predictions == labels).sum()
+                    num_preds = labels.numel()
+                    accuracy = correct_predictions / num_preds
 
-                    # Add the loss to the total loss
-                    eval_total_loss += loss.cpu().detach().item()
+                    #metrics and logs
+                    total_loss += loss.cpu().detach().item()
+                    total_accuracy+=accuracy.cpu().detach().item()
 
                     # Update the progress bar
-                    test_loader_tqdm.set_postfix({'eval_loss': eval_total_loss / (test_loader_tqdm.n + 1)})
+                    test_loader_tqdm.set_postfix({'eval_loss': total_loss / (test_loader_tqdm.n + 1),'eval_accuracy': total_accuracy /  (train_loader_tqdm.n + 1)})
 
-            avg_eval_loss = eval_total_loss / len(test_loader)
-            print(f"Average evaluation loss: {avg_eval_loss}")
-            model.train()
+            # Calculate the average loss over the training data.
+            avg_eval_loss = total_loss / len(test_loader)
+            avg_eval_accuracy = total_accuracy / len(test_loader)
+            print(f"Average eval loss: {avg_eval_loss}")
+            print(f"Average eval accuracy: {avg_eval_accuracy}")
+            
 
 
             # Save a checkpoint
@@ -137,8 +156,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Script to train GPT-2 model")
 
     parser.add_argument('--config', type=str, default='./configs/150m', help="Path to the config for building the model")
-    parser.add_argument('--train_data', type=str, required=True, help="Path to the training data (.npy file)")
-    parser.add_argument('--test_data', type=str, required=True, help="Path to the test data (.npy file)")
+    parser.add_argument('--data_dir', type=str, required=True, help="Directory containing the train and test data")
     parser.add_argument('--save_dir', type=str, required=True, help="Directory to save model checkpoints")
     parser.add_argument('--batch_size', type=int, default=2, help="Batch size for training")
     parser.add_argument('--lr', type=float, default=0.00016, help="Learning rate for the optimizer")
@@ -161,8 +179,11 @@ if __name__ == '__main__':
     optimizer = AdamW(model.parameters(), lr=0.00016, betas=(0.9, 0.999), eps=1.0e-8)
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=args.epochs, T_mult=1, eta_min=0, last_epoch=-1) 
     
-    train_dataset = TextDataset(args.train_data)
-    test_dataset = TextDataset(args.test_data)
+    train_data_path = os.path.join(args.data_dir, 'train_tokens.npy')
+    test_data_path = os.path.join(args.data_dir, 'test_tokens.npy')
+
+    train_dataset = TextDataset(train_data_path)
+    test_dataset = TextDataset(test_data_path)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size)
