@@ -1,5 +1,18 @@
 KEY ISSUES:
 
-1. loss metric is calculated in a non acurate way curently the fact tensors are masked is not really taken into acount
-2. the dataset split is diffrent than the paper since we dont have their seed value 
-3. preplexity is done in a non numericly stable manner 
+1. we are missing the preplexity calculation 
+
+USAGE: 
+
+run:
+
+ python tokenize_data.py --data_path data --save_path token_path
+
+to make a tokens dataset 
+
+and run:
+
+	python train.py --data_dir token_path/ --save_dir checkpoint/
+
+to run training 
+
