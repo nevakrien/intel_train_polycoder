@@ -1,5 +1,6 @@
 import argparse
 import torch
+import torch.nn.functional as F 
 from torch.utils.data import DataLoader
 import numpy as np
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
@@ -10,22 +11,40 @@ import os
 
 
 class TextDataset(torch.utils.data.Dataset):
-    def __init__(self, file_path,pad_token=1):
-        self.data = np.load(file_path)
-        self.pad_token=1
+    def __init__(self, file_path):
+        data = np.load(file_path)
+        self.x=data['x']
+        self.y=data['y']
 
     def __len__(self):
-        return len(self.data)
+        return len(self.y)
 
     def __getitem__(self, idx):
-        labels = torch.IntTensor(self.data[idx])
-        mask=labels==-100 
-        input_ids=labels.clone()
-        input_ids[mask]=self.pad_token
-        labels=labels.to(torch.long)
-        return input_ids,labels,mask
-    
 
+        x = torch.tensor(self.x[idx],dtype=torch.int32)
+        y = torch.tensor(self.y[idx],dtype=torch.int64)
+        mask=y!=-100
+        return x,y,mask
+    
+def get_metrics(model,x,y,mask):
+    try:
+        logits = model(x,mask).logits
+    except Exception as e:
+        print(mask)
+        print(x)
+        raise e
+
+    num_preds = mask.sum()
+    y=y[mask]
+    logits=logits[mask]
+    
+    loss=F.cross_entropy(logits, y)
+
+    preds=torch.argmax(logits,dim=-1) 
+    corect=(preds==y).sum()
+
+    return {'loss':loss,'num_preds':num_preds,'corect':corect}
+    
 def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, save_interval, eval_interval, checkpoint_dir,device='cpu'):
     model.train()
     print(f'\ncomputations are done on {device}\n')
@@ -37,37 +56,25 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
         model.train()
         # Reset the total loss for this epoch.
         total_loss=0
-        total_batched_loss = 0
         total_corect=0
         total_seen=0
 
         # Training loop with tqdm
         train_loader_tqdm = tqdm(train_loader)
-        for batch in train_loader_tqdm:
-            # Zero the gradients
+        for batch in train_loader_tqdm: 
+
             optimizer.zero_grad()
 
             batch=(x.to(device) for x in batch)            
-            input_ids,labels,mask=batch    
+            x,y,mask=batch    
             
-            # Forward pass
-            outputs = model(input_ids, labels=labels,attention_mask=mask)
+            metrics=get_metrics(model,x,y,mask)
+            loss=metrics['loss']
+            num_preds=metrics['num_preds']
+            corect=metrics['corect']
             
-            # Get the loss and logits from the outputs
-            loss = outputs.loss
-            logits = outputs.logits            
-            
-           # Calculate accuracy
-            idx=~mask.bool()[:,1:] #we need to do this because the end token isnt actuly being considered for predictions
-            predictions = torch.argmax(logits[:,:-1][idx], dim=-1)
-            correct_predictions = (predictions == labels[:,1:][idx]).sum()
-            num_preds = idx.sum()
-            assert num_preds>0
-
-            #metrics and logs
-            total_batched_loss += loss.cpu().detach().item()
             total_loss += (loss*num_preds).cpu().detach().item()
-            total_corect+=correct_predictions.cpu().detach().item()
+            total_corect+=corect.cpu().detach().item()
             total_seen+=num_preds.cpu().detach().item()
 
             # Backward pass
@@ -76,21 +83,18 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             scheduler.step()
 
 
-            train_loader_tqdm.set_postfix({'training_loss':total_loss/total_seen,'batch_loss': total_batched_loss /  (train_loader_tqdm.n + 1),'training_accuracy': total_corect /total_seen})
+            train_loader_tqdm.set_postfix({'training_loss':total_loss/total_seen,'training_accuracy': total_corect /total_seen})
 
         # Calculate the average loss over the training data.
         avg_train_loss= total_loss/total_seen
-        avg_batch_loss = total_batched_loss / len(train_loader)
         avg_train_accuracy = total_corect/total_seen
         print(f"Average training loss: {avg_train_loss}")
-        print(f"Average batched_loss: {avg_batch_loss}")
         print(f"Average training accuracy: {avg_train_accuracy}")
 
         # Evaluation
         if epoch % eval_interval == 0 or epoch==num_iters:
             model.eval()
             total_loss=0
-            total_batched_loss = 0
             total_corect=0
             total_seen=0
 
@@ -100,37 +104,24 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
                 with torch.no_grad():
                     # Load data and labels
                     batch=(x.to(device) for x in batch)
-                    input_ids,labels,mask=batch    
+                    x,y,mask=batch       
                     
-                    # Forward pass
-                    outputs = model(input_ids, labels=labels,attention_mask=mask)
+                    metrics=get_metrics(model,x,y,mask)
+                    loss=metrics['loss']
+                    num_preds=metrics['num_preds']
+                    corect=metrics['corect']
                     
-                    # Get the loss and logits from the outputs
-                    loss = outputs.loss
-                    logits = outputs.logits            
-                    
-                    # Calculate accuracy
-                    idx=~mask.bool()[:,1:] #we need to do this because the end token isnt actuly being considered for predictions
-                    predictions = torch.argmax(logits[:,:-1][idx], dim=-1)
-                    correct_predictions = (predictions == labels[:,1:][idx]).sum()
-                    num_preds = idx.sum()
-                    assert num_preds>0 
-
-                    #metrics and logs
-                    total_batched_loss += loss.cpu().detach().item()
                     total_loss += (loss*num_preds).cpu().detach().item()
-                    total_corect+=correct_predictions.cpu().detach().item()
+                    total_corect+=corect.cpu().detach().item()
                     total_seen+=num_preds.cpu().detach().item()
 
                     # Update the progress bar
-                    test_loader_tqdm.set_postfix({'eval_loss':total_loss/total_seen,'batch_loss':total_batched_loss / (test_loader_tqdm.n + 1),'eval_accuracy': total_corect/total_seen})
+                    test_loader_tqdm.set_postfix({'eval_loss':total_loss/total_seen,'eval_accuracy': total_corect/total_seen})
 
             # Calculate the average loss over the training data.
             avg_eval_loss= total_loss/total_seen
-            avg_batch_loss = total_batched_loss / len(test_loader)
             avg_eval_accuracy = total_corect/total_seen
             print(f"Average eval loss: {avg_eval_loss}")
-            print(f"Average batched_loss: {avg_batch_loss}")
             print(f"Average eval accuracy: {avg_eval_accuracy}")
             
 
@@ -174,8 +165,8 @@ if __name__ == '__main__':
     optimizer = AdamW(model.parameters(), lr=0.00016, betas=(0.9, 0.999), eps=1.0e-8)
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=args.epochs, T_mult=1, eta_min=0, last_epoch=-1) 
     
-    train_data_path = os.path.join(args.data_dir, 'train_tokens.npy')
-    test_data_path = os.path.join(args.data_dir, 'test_tokens.npy')
+    train_data_path = os.path.join(args.data_dir, 'train_tokens.npz')
+    test_data_path = os.path.join(args.data_dir, 'test_tokens.npz')
 
     train_dataset = TextDataset(train_data_path)
     test_dataset = TextDataset(test_data_path)

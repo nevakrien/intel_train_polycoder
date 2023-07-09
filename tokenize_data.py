@@ -39,12 +39,12 @@ def load_data(file):
                 errors += 1
     return dict(data), errors
 
-def load_all_data(dir_path,save_path, num_workers: int = None):
+def load_all_data(data_path,save_path, num_workers: int = None):
     num_workers = num_workers if num_workers else cpu_count()
     
     print("Starting loading data...")
     with Pool(num_workers) as p:
-        results = p.map(load_data, [os.path.join(dir_path, file) for file in os.listdir(dir_path) if file.endswith('.json')])
+        results = p.map(load_data, [os.path.join(data_path, file) for file in os.listdir(data_path) if file.endswith('.json')])
     print("Finished loading data.")
 
     data = defaultdict(lambda:{})
@@ -89,19 +89,43 @@ def tokenize_text(params):
     #this is bugged!!! pad_token_id = tokenizer.pad_token_id
 
     if len(tokens) > gpt_cut:
-        chunks = [tokens[i : i + max_len] for i in range(0, len(tokens), max_len)]
-        # Pad the last chunk to max_len with the pad_token_id
-        chunks[-1] = chunks[-1] + [-100]*(max_len - len(chunks[-1]))
-        return chunks
+
+        x_chunks = [tokens[i : i + max_len] for i in range(0, len(tokens)-1, max_len)]
+        x_chunks[-1] = x_chunks[-1] + [1]*(max_len - len(x_chunks[-1]))
+
+        y_chunks = [tokens[i : i + max_len] for i in range(1, len(tokens), max_len)]
+        y_chunks[-1] = y_chunks[-1] + [-100]*(max_len - len(y_chunks[-1]))
+        return x_chunks,y_chunks
     else:
         return None
 
+def save_numpy(token_chunks,path):
+    x_chunks=[chunks[0] for chunks in token_chunks if chunks is not None]
+    y_chunks=[chunks[1] for chunks in token_chunks if chunks is not None]
 
-def preprocess_data(dir_path, save_path, tokenizer_path, max_len, gpt_cut, mem_cut, test_size,debug_cut_size):
+    #flattening the chunks 
+    x = []
+    for chunks in x_chunks:
+        for chunk in chunks:
+            x.append(chunk) 
+
+    y = []
+    for chunks in y_chunks:
+        for chunk in chunks:
+            y.append(chunk) 
+
+    x=np.array(x,dtype=np.int64)
+    y=np.array(y,dtype=np.int64)
+
+    np.savez(path,x=x,y=y)
+
+
+
+def preprocess_data(data_path, save_path, tokenizer_path, max_len, gpt_cut, mem_cut, test_size,debug_cut_size):
     assert os.path.exists(save_path) 
 
     tokenizer = GPT2Tokenizer.from_pretrained(tokenizer_path)
-    codes,names = load_all_data(dir_path,save_path)
+    codes,names = load_all_data(data_path,save_path)
 
     if debug_cut_size!=None:
         codes=codes[:debug_cut_size]
@@ -115,6 +139,7 @@ def preprocess_data(dir_path, save_path, tokenizer_path, max_len, gpt_cut, mem_c
 
     names=[name for name,chunks in zip(names,token_chunks) if chunks is not None]
     token_chunks=[chunks for chunks in token_chunks if chunks is not None]
+    
     print(f"Finished tokenization. Kept {len(token_chunks)} files.")
 
     print('Spliting the dataset')
@@ -128,6 +153,17 @@ def preprocess_data(dir_path, save_path, tokenizer_path, max_len, gpt_cut, mem_c
 
     test_chunks=[token_chunks[i] for i in test_indices]
     test_names=[names[i] for i in test_indices]
+
+    print('Saving lengths')
+    test_lengths = [len(chunks[0]) for chunks in test_chunks]
+    with open(os.path.join(save_path,'test_lengths.csv'), 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerows([[length] for length in test_lengths])
+
+    train_lengths = [len(chunks[0]) for chunks in train_chunks]
+    with open(os.path.join(save_path,'train_lengths.csv'), 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerows([[length] for length in train_lengths])
     
     print('Saving repo names')
     with open(os.path.join(save_path,'train_names.json'), 'w') as file:
@@ -135,37 +171,9 @@ def preprocess_data(dir_path, save_path, tokenizer_path, max_len, gpt_cut, mem_c
     with open(os.path.join(save_path,'test_names.json'), 'w') as file:
         json.dump(test_names, file)
 
-
-    print('Saving lengths')
-    test_lengths = [len(chunks) for chunks in test_chunks]
-    with open(os.path.join(save_path,'test_lengths.csv'), 'w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerows([[length] for length in test_lengths])
-
-    train_lengths = [len(chunks) for chunks in train_chunks]
-    with open(os.path.join(save_path,'train_lengths.csv'), 'w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerows([[length] for length in train_lengths])
-
-
-    #flattening the chunks 
-    train_tokens = []
-    for chunks in train_chunks:
-        for chunk in chunks:
-            train_tokens.append(chunk)  
-
-    train_tokens=np.array(train_tokens) 
-    np.save(os.path.join(save_path, "train_tokens.npy"), train_tokens)
-    print(f"train ready with {len(train_tokens)} sequnces")
-    
-    test_tokens = []
-    for chunks in test_chunks:
-        for chunk in chunks:
-            test_tokens.append(chunk)  
-    
-    test_tokens=np.array(test_tokens) 
-    np.save(os.path.join(save_path, "test_tokens.npy"), test_tokens)
-    print(f"test ready with {len(test_tokens)} sequnces")
+    print('Saving repo tokens')
+    save_numpy(train_chunks,path=os.path.join(save_path, "train_tokens.npz"))
+    save_numpy(test_chunks,path=os.path.join(save_path, "test_tokens.npz"))
 
 
 
@@ -173,7 +181,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dir_path", help="Directory containing the data files", required=True)
+    parser.add_argument("--data_path", help="Directory containing the data files", required=True)
     parser.add_argument("--save_path", help="Path to save the numpy files", required=True)
     parser.add_argument("--tokenizer_path", default="./configs/tokenizer", help="Path to the tokenizer")
     parser.add_argument("--max_len", default=2048, type=int, help="Maximum length for each sequence")
@@ -185,4 +193,4 @@ if __name__ == "__main__":
 
     if args.debug_cut_size!=None:
         print('you have ran this aplication in debug mode')
-    preprocess_data(args.dir_path, args.save_path, args.tokenizer_path, args.max_len, args.gpt_cut, args.mem_cut, args.test_size, args.debug_cut_size) 
+    preprocess_data(args.data_path, args.save_path, args.tokenizer_path, args.max_len, args.gpt_cut, args.mem_cut, args.test_size, args.debug_cut_size) 
