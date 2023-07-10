@@ -170,7 +170,7 @@ if __name__ == '__main__':
         device='cpu'
 
     config=GPTNeoXConfig.from_pretrained(args.config)
-    model=GPTNeoXForCausalLM(config)
+    model=GPTNeoXForCausalLM(config).to(device)
 
     optimizer = AdamW(model.parameters(), lr=0.00016, betas=(0.9, 0.999), eps=1.0e-8)
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=args.epochs, T_mult=1, eta_min=0, last_epoch=-1) 

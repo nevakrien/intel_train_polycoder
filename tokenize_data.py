@@ -134,7 +134,7 @@ def preprocess_data(data_path, save_path, tokenizer_path, max_len, gpt_cut, mem_
     tokenizer = GPT2Tokenizer.from_pretrained(tokenizer_path)
     codes,names = load_all_data(data_path,save_path)
 
-    if debug_cut_size!=None:
+    if debug_cut_size!=0:
         codes=codes[:debug_cut_size]
         names=names[:debug_cut_size]
         print(f'cuted codes to length{len(codes)}')
@@ -202,11 +202,11 @@ if __name__ == "__main__":
     parser.add_argument("--mem_cut", default=1_000_000, type=int, help="Cut-off for memory usage")
     parser.add_argument("--test_size", default=2, type=int, help="Size of the test set")
     parser.add_argument('--lang', type=str, required=True, help='Languge that will be used for pygments')
-    parser.add_argument("--debug_cut_size", default=10, type=int, help="Size for debugging. If None, use full dataset.")
+    parser.add_argument("--debug_cut_size", default=10, type=int, help="Size for debugging. If 0, use full dataset.")
     
     args = parser.parse_args()
 
-    if args.debug_cut_size!=None:
+    if args.debug_cut_size!=0:
         print('you have ran this aplication in debug mode')
     
     lexer = get_lexer_by_name(args.lang) 
