@@ -8,11 +8,11 @@ from torch.optim import AdamW
 from transformers import GPTNeoXForCausalLM, GPTNeoXConfig
 from tqdm import tqdm
 import os
+import json
 
 
 class TextDataset(torch.utils.data.Dataset):
-    def __init__(self, file_path):
-        data = np.load(file_path)
+    def __init__(self, data):
         self.x=data['x']
         self.y=data['y']
 
@@ -45,7 +45,9 @@ def get_metrics(model,x,y,mask):
 
     return {'loss':loss,'num_preds':num_preds,'corect':corect}
     
-def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, save_interval, eval_interval, checkpoint_dir,device='cpu'):
+def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, 
+    save_interval, eval_interval, checkpoint_dir,device,
+    train_denominator, test_denominator):
     model.train()
     print(f'\ncomputations are done on {device}\n')
 
@@ -88,6 +90,9 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
         # Calculate the average loss over the training data.
         avg_train_loss= total_loss/total_seen
         avg_train_accuracy = total_corect/total_seen
+        train_perplexity=np.exp(total_loss/train_denominator)
+
+        print(f"Train Perplexity: {train_perplexity}")
         print(f"Average training loss: {avg_train_loss}")
         print(f"Average training accuracy: {avg_train_accuracy}")
 
@@ -121,6 +126,9 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
             # Calculate the average loss over the training data.
             avg_eval_loss= total_loss/total_seen
             avg_eval_accuracy = total_corect/total_seen
+            eval_perplexity=np.exp(total_loss/train_denominator)
+
+            print(f"Eval Perplexity: {eval_perplexity}")
             print(f"Average eval loss: {avg_eval_loss}")
             print(f"Average eval accuracy: {avg_eval_accuracy}")
             
@@ -134,7 +142,9 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, sav
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': avg_train_loss,
-                    'eval loss':avg_eval_loss
+                    'train perplexity': train_perplexity,
+                    'eval loss':avg_eval_loss,
+                    'eval perplexity':eval_perplexity
                 }, f'{checkpoint_dir}/checkpoint_{epoch}.pt')
 
 
@@ -165,13 +175,24 @@ if __name__ == '__main__':
     optimizer = AdamW(model.parameters(), lr=0.00016, betas=(0.9, 0.999), eps=1.0e-8)
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=args.epochs, T_mult=1, eta_min=0, last_epoch=-1) 
     
+    pygments_path=os.path.join(args.data_dir,'overhead.json')
     train_data_path = os.path.join(args.data_dir, 'train_tokens.npz')
     test_data_path = os.path.join(args.data_dir, 'test_tokens.npz')
 
-    train_dataset = TextDataset(train_data_path)
-    test_dataset = TextDataset(test_data_path)
+    with open(pygments_path) as f:
+        pygments_vocab=json.load(f)['vocab']
+    train_data = np.load(train_data_path)
+    test_data = np.load(test_data_path)
+
+    train_denominator=pygments_vocab*sum(train_data['pygments_lens'])
+    test_denominator=pygments_vocab*sum(test_data['pygments_lens'])
+
+    train_dataset = TextDataset(train_data)
+    test_dataset = TextDataset(test_data)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size)
 
-    train(model, train_loader, test_loader, optimizer, scheduler, args.epochs, args.save_interval, args.eval_interval, args.save_dir,device)
+    train(model, train_loader, test_loader, optimizer, scheduler,
+     args.epochs, args.save_interval, args.eval_interval, args.save_dir,device,
+     train_denominator,test_denominator)

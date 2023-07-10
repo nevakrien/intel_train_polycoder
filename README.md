@@ -1,12 +1,12 @@
 KEY ISSUES:
 
-1. we are missing the preplexity calculation 
+1. preplexity calculation gave suspeciously low results in testing could be randomness but it may be wrong...  
 
 USAGE: 
 
 run:
 
- python tokenize_data.py --data_path data --save_path token_path
+ python tokenize_data.py --data_path data --save_path token_path --lang 'c++'
 
 to make a tokens dataset 
 
