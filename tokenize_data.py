@@ -14,6 +14,9 @@ import numpy as np
 from transformers import GPT2Tokenizer
 from multiprocessing import cpu_count, Pool
 
+import pygments
+from pygments.lexers import get_lexer_by_name
+
 
 def get_hash(code):
     hash = hashlib.sha256(code.encode('UTF-8'))
@@ -80,7 +83,7 @@ def get_mem_usage(code):
     return mem_usage 
 
 def tokenize_text(params):
-    text, tokenizer, max_len, gpt_cut, mem_cut = params
+    text, tokenizer, max_len, gpt_cut, mem_cut , lexer = params
 
     if get_mem_usage(text) > mem_cut:
         return None
@@ -95,13 +98,17 @@ def tokenize_text(params):
 
         y_chunks = [tokens[i : i + max_len] for i in range(1, len(tokens), max_len)]
         y_chunks[-1] = y_chunks[-1] + [-100]*(max_len - len(y_chunks[-1]))
-        return x_chunks,y_chunks
+
+        pygments_len=len(list(pygments.lex(text, lexer)))
+        return x_chunks,y_chunks,pygments_len
     else:
         return None
+
 
 def save_numpy(token_chunks,path):
     x_chunks=[chunks[0] for chunks in token_chunks if chunks is not None]
     y_chunks=[chunks[1] for chunks in token_chunks if chunks is not None]
+    pygments_lens=[chunks[2] for chunks in token_chunks if chunks is not None]# 
 
     #flattening the chunks 
     x = []
@@ -117,11 +124,11 @@ def save_numpy(token_chunks,path):
     x=np.array(x,dtype=np.int64)
     y=np.array(y,dtype=np.int64)
 
-    np.savez(path,x=x,y=y)
+    np.savez(path,x=x,y=y,pygments_lens=pygments_lens)
 
 
 
-def preprocess_data(data_path, save_path, tokenizer_path, max_len, gpt_cut, mem_cut, test_size,debug_cut_size):
+def preprocess_data(data_path, save_path, tokenizer_path, max_len, gpt_cut, mem_cut, test_size,lexer,debug_cut_size):
     assert os.path.exists(save_path) 
 
     tokenizer = GPT2Tokenizer.from_pretrained(tokenizer_path)
@@ -135,15 +142,17 @@ def preprocess_data(data_path, save_path, tokenizer_path, max_len, gpt_cut, mem_
 
     print("Starting tokenization...")
     with Pool(cpu_count()) as p:
-        token_chunks = p.map(tokenize_text, [(text, tokenizer, max_len, gpt_cut, mem_cut) for text in codes])
+        token_chunks = p.map(tokenize_text, [(text, tokenizer, max_len, gpt_cut, mem_cut , lexer) for text in codes])
 
     names=[name for name,chunks in zip(names,token_chunks) if chunks is not None]
     token_chunks=[chunks for chunks in token_chunks if chunks is not None]
-    
+
     print(f"Finished tokenization. Kept {len(token_chunks)} files.")
 
     print('Spliting the dataset')
     # Split into train and test sets
+    lex_vocab = sum(len(v) for v in lexer.tokens.values()) 
+
     indices = np.arange(len(token_chunks))
     test_indices = np.random.choice(indices, size=test_size, replace=False)
     train_indices = np.array(list(set(indices) - set(test_indices)))
@@ -153,6 +162,10 @@ def preprocess_data(data_path, save_path, tokenizer_path, max_len, gpt_cut, mem_
 
     test_chunks=[token_chunks[i] for i in test_indices]
     test_names=[names[i] for i in test_indices]
+
+    print('saving overhead')
+    with open(os.path.join(save_path,'overhead.json'), 'w') as file:
+        json.dump({'vocab':lex_vocab,'lexer':type(lexer).__name__}, file)
 
     print('Saving lengths')
     test_lengths = [len(chunks[0]) for chunks in test_chunks]
@@ -188,9 +201,14 @@ if __name__ == "__main__":
     parser.add_argument("--gpt_cut", default=100, type=int, help="Cut-off for token length")
     parser.add_argument("--mem_cut", default=1_000_000, type=int, help="Cut-off for memory usage")
     parser.add_argument("--test_size", default=2, type=int, help="Size of the test set")
+    parser.add_argument('--lang', type=str, required=True, help='Languge that will be used for pygments')
     parser.add_argument("--debug_cut_size", default=10, type=int, help="Size for debugging. If None, use full dataset.")
+    
     args = parser.parse_args()
 
     if args.debug_cut_size!=None:
         print('you have ran this aplication in debug mode')
-    preprocess_data(args.data_path, args.save_path, args.tokenizer_path, args.max_len, args.gpt_cut, args.mem_cut, args.test_size, args.debug_cut_size) 
+    
+    lexer = get_lexer_by_name(args.lang) 
+    
+    preprocess_data(args.data_path, args.save_path, args.tokenizer_path, args.max_len, args.gpt_cut, args.mem_cut, args.test_size,lexer, args.debug_cut_size) 
