@@ -25,8 +25,23 @@ class TextDataset(torch.utils.data.Dataset):
         y = torch.tensor(self.y[idx],dtype=torch.int64)
         mask=y!=-100
         return x,y,mask
-    
-def get_metrics(model,x,y,mask):
+
+def get_metrics(model,batch,mini_batch_size,device,do_grads=False): 
+    batch_size=batch[0].size(0)
+    ans={'loss':0,'num_preds':0,'corect':0}
+    for i in range(0,batch_size,mini_batch_size):
+        
+        mini_batch=[x[i:i+mini_batch_size] for x in batch]
+        #print([x.shape for x in mini_batch])
+        
+        mini_metrics=get_min_batch_metrics(model,mini_batch,device,do_grads)
+        for k,v in mini_metrics.items():
+            ans[k]+=v
+    return ans
+
+def get_min_batch_metrics(model,batch,device,do_grads):
+    batch=(x.to(device) for x in batch)            
+    x,y,mask=batch
     try:
         logits = model(x,mask).logits
     except Exception as e:
@@ -39,13 +54,15 @@ def get_metrics(model,x,y,mask):
     logits=logits[mask]
     
     loss=F.cross_entropy(logits, y)
+    if do_grads:
+        loss.backward() 
 
     preds=torch.argmax(logits,dim=-1) 
     corect=(preds==y).sum()
 
     return {'loss':loss,'num_preds':num_preds,'corect':corect}
     
-def train(model, train_loader, test_loader, optimizer, scheduler, num_iters, 
+def train(model, train_loader, test_loader,mini_batch_size, optimizer, scheduler, num_iters, 
     save_interval, eval_interval, checkpoint_dir,device,
     train_denominator, test_denominator):
     model.train()
@@ -67,10 +84,9 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters,
 
             optimizer.zero_grad()
 
-            batch=(x.to(device) for x in batch)            
-            x,y,mask=batch    
+                
             
-            metrics=get_metrics(model,x,y,mask)
+            metrics=get_metrics(model,batch,mini_batch_size,device,do_grads=True)
             loss=metrics['loss']
             num_preds=metrics['num_preds']
             corect=metrics['corect']
@@ -80,7 +96,6 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters,
             total_seen+=num_preds.cpu().detach().item()
 
             # Backward pass
-            loss.backward() 
             optimizer.step()
             scheduler.step()
 
@@ -107,11 +122,9 @@ def train(model, train_loader, test_loader, optimizer, scheduler, num_iters,
             test_loader_tqdm = tqdm(test_loader, desc="Evaluating")
             for batch in test_loader_tqdm:
                 with torch.no_grad():
-                    # Load data and labels
-                    batch=(x.to(device) for x in batch)
-                    x,y,mask=batch       
+                           
                     
-                    metrics=get_metrics(model,x,y,mask)
+                    metrics=get_metrics(model,batch,mini_batch_size,device)
                     loss=metrics['loss']
                     num_preds=metrics['num_preds']
                     corect=metrics['corect']
@@ -154,7 +167,8 @@ if __name__ == '__main__':
     parser.add_argument('--config', type=str, default='./configs/160m', help="Path to the config for building the model")
     parser.add_argument('--data_dir', type=str, required=True, help="Directory containing the train and test data")
     parser.add_argument('--save_dir', type=str, required=True, help="Directory to save model checkpoints")
-    parser.add_argument('--batch_size', type=int, default=2, help="Batch size for training")
+    parser.add_argument('--batch_size', type=int, default=2, help="Big batch sizes are alowed")
+    parser.add_argument('--mini_batch_size', type=int, default=0, help="should match to ur machine")
     parser.add_argument('--lr', type=float, default=0.00016, help="Learning rate for the optimizer")
     parser.add_argument('--epochs', type=int, default=5, help="Number of epochs to train")
     parser.add_argument('--save_interval', type=int, default=1, help="Interval to save model checkpoints")
@@ -163,6 +177,10 @@ if __name__ == '__main__':
     #parser.add_argument('--num_xpus', type=int, default=None, help="required for runing on intel fast")
 
     args = parser.parse_args()
+
+    if args.mini_batch_size==0:
+        args.mini_batch_size=args.batch_size
+    
     if args.xpu:
         import intel_extension_for_pytorch as ipex
         device='xpu'
@@ -193,6 +211,6 @@ if __name__ == '__main__':
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size)
 
-    train(model, train_loader, test_loader, optimizer, scheduler,
+    train(model, train_loader, test_loader,args.mini_batch_size, optimizer, scheduler,
      args.epochs, args.save_interval, args.eval_interval, args.save_dir,device,
      train_denominator,test_denominator)
